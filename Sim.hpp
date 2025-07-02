@@ -1,11 +1,12 @@
     #ifndef _SIM_HPP
     #define _SIM_HPP
     #include "Move.hpp"
-    #include "globals.hpp"
-    #include <unordered_map>
-    #include <vector>
-    #include <functional>
-    #include <random>
+#include "globals.hpp"
+#include <unordered_map>
+#include <vector>
+#include <functional>
+#include <random>
+#include <memory>
 
     // Custom hash function for std::vector<int>
 
@@ -59,14 +60,19 @@
         std::vector<std::string> grid_config_starting_history;    // Grid state before move is attempted
         std::vector<std::string> grid_config_potential_history;   // Grid state after move is applied (before accept/reject)
 
-        // ------------------------------
-        // New: allowed lattice sites
-        // ------------------------------
-        // Stores the indices of lattice sites that are currently active in the
-        // simulation.  All energy calculations and initial cluster assignment
-        // routines will be restricted to this subset.  By default this is the
-        // full lattice (0..N*N-1).
-        std::vector<int> allowed_sites;
+            // ------------------------------
+    // New: allowed lattice sites
+    // ------------------------------
+    // Stores the indices of lattice sites that are currently active in the
+    // simulation.  All energy calculations and initial cluster assignment
+    // routines will be restricted to this subset.  By default this is the
+    // full lattice (0..N*N-1).
+    std::vector<int> allowed_sites;
+
+    // ------------------------------
+    // Child simulations for partitioning
+    // ------------------------------
+    std::vector<std::unique_ptr<Sim>> children_simulations;
 
         // Function declarations
         void cluster_conditions(int cluster_condition );
@@ -110,6 +116,11 @@
          void cluster_conditions_from_indices_matrix(const std::vector<std::vector<int>>& property_matrix, int tier_size = 1);
          // Build clusters from a matrix using rotation-only patterns (no inversions)
          void cluster_conditions_from_indices_matrix_uninverted(const std::vector<std::vector<int>>& property_matrix, int tier_size = 2);
+         
+         // Partitioning and child simulation functions
+         std::vector<Sim*> partition(bool use_inversions = true);
+         float iterate_children(bool debug = false);
+         void resynchronize();
     };
 
 

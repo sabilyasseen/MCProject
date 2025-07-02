@@ -1404,3 +1404,214 @@ void Sim::cluster_conditions_from_indices_matrix_uninverted(const std::vector<st
 
     grid.assign_initial_clusters(allowed_sites);
 }
+
+// =====================================================
+// Partitioning and Child Simulation Functions
+// =====================================================
+
+std::vector<Sim*> Sim::partition(bool use_inversions) {
+    children_simulations.clear();
+    
+    // Determine how many clusters to skip (first 1 or 2 depending on inversions)
+    int clusters_to_skip = use_inversions ? 2 : 1;
+    
+    // Calculate the number of child simulations to create
+    int num_children = std::max(0, grid.num_clusters - clusters_to_skip);
+    
+    if (num_children == 0) {
+        std::cerr << "[partition] No clusters available for partitioning" << std::endl;
+        return {};
+    }
+    
+    // Create child simulations
+    children_simulations.clear();
+    children_simulations.reserve(num_children);
+    std::vector<Sim*> child_pointers;
+    
+    for (int i = 0; i < num_children; ++i) {
+        children_simulations.emplace_back(std::make_unique<Sim>());
+        int cluster_index = i + clusters_to_skip;
+        
+        // Initialize child with same conditions as parent
+        children_simulations[i]->initialize(conditions);
+        
+        // Copy grid into child
+        children_simulations[i]->copy_grid(grid);
+        
+        // Set up allowed sites based on cluster boundary/interior sites
+        children_simulations[i]->allowed_sites.clear();
+        
+        // Get boundary and interior sites for this cluster
+        const Cluster& target_cluster = grid.clusters[cluster_index];
+        
+        // Add boundary sites for both species
+        for (int species = 0; species < target_cluster.num_species; ++species) {
+            for (const auto& boundary_pair : target_cluster.boundary_cells[species]) {
+                children_simulations[i]->allowed_sites.push_back(boundary_pair.first);
+            }
+            for (const auto& interior_pair : target_cluster.interior_cells[species]) {
+                children_simulations[i]->allowed_sites.push_back(interior_pair.first);
+            }
+        }
+        
+        // Sort and remove duplicates from allowed sites
+        std::sort(children_simulations[i]->allowed_sites.begin(), children_simulations[i]->allowed_sites.end());
+        children_simulations[i]->allowed_sites.erase(
+            std::unique(children_simulations[i]->allowed_sites.begin(), 
+                       children_simulations[i]->allowed_sites.end()),
+            children_simulations[i]->allowed_sites.end()
+        );
+        
+        // Set up clusters for the child - assign only the target cluster (or 2 if using inversions)
+        children_simulations[i]->reset_cluster_conditions();
+        
+        if (use_inversions) {
+            // Add the original cluster and one additional cluster
+            children_simulations[i]->grid.add_cluster(target_cluster.cluster_size);
+            for (const auto& pattern : target_cluster.property.properties) {
+                children_simulations[i]->grid.clusters.back().add_property(pattern);
+            }
+            children_simulations[i]->grid.clusters.back().property.generate_inversions();
+            
+            // Add second cluster if available
+            if (cluster_index + 1 < grid.num_clusters) {
+                const Cluster& second_cluster = grid.clusters[cluster_index + 1];
+                children_simulations[i]->grid.add_cluster(second_cluster.cluster_size);
+                for (const auto& pattern : second_cluster.property.properties) {
+                    children_simulations[i]->grid.clusters.back().add_property(pattern);
+                }
+                children_simulations[i]->grid.clusters.back().property.generate_inversions();
+            }
+        } else {
+            // Add only the single target cluster
+            children_simulations[i]->grid.add_cluster(target_cluster.cluster_size);
+            for (const auto& pattern : target_cluster.property.properties) {
+                children_simulations[i]->grid.clusters.back().add_property(pattern);
+            }
+        }
+        
+        // Add restricted clusters for all other clusters
+        for (int j = 0; j < grid.num_clusters; ++j) {
+            if (j != cluster_index && (!use_inversions || j != cluster_index + 1)) {
+                children_simulations[i]->grid.add_restricted_cluster(grid.clusters[j].cluster_size);
+                for (const auto& pattern : grid.clusters[j].property.properties) {
+                    children_simulations[i]->grid.restricted_clusters.back().add_property(pattern);
+                }
+            }
+        }
+        
+        // Reassign clusters based on allowed sites
+        children_simulations[i]->grid.assign_initial_clusters(children_simulations[i]->allowed_sites);
+        
+        // Recalculate energy
+        children_simulations[i]->system_energy = children_simulations[i]->compute_total_energy();
+        
+        child_pointers.push_back(children_simulations[i].get());
+    }
+    
+    std::cout << "[partition] Created " << num_children << " child simulations" << std::endl;
+    return child_pointers;
+}
+
+float Sim::iterate_children(bool debug) {
+    if (children_simulations.empty()) {
+        std::cerr << "[iterate_children] No child simulations available" << std::endl;
+        return 0.0f;
+    }
+    
+    float total_energy = 0.0f;
+    std::vector<int> combined_changed_atoms;
+    
+    // Iterate each child simulation
+    for (size_t i = 0; i < children_simulations.size(); ++i) {
+        if (debug) {
+            std::cout << "[iterate_children] Running iteration for child " << i << std::endl;
+        }
+        
+        // Run one iteration on the child
+        bool accepted = children_simulations[i]->iterate_improved(debug);
+        
+        // Add child's energy to total
+        total_energy += children_simulations[i]->system_energy;
+        
+        // Collect changed atoms from the child's last iteration
+        if (!children_simulations[i]->accepted_atoms_history.empty()) {
+            const auto& child_changed = children_simulations[i]->accepted_atoms_history.back();
+            combined_changed_atoms.insert(combined_changed_atoms.end(), 
+                                        child_changed.begin(), child_changed.end());
+        }
+        
+        if (debug) {
+            std::cout << "[iterate_children] Child " << i 
+                      << " energy: " << children_simulations[i]->system_energy 
+                      << " (accepted: " << (accepted ? "YES" : "NO") << ")" << std::endl;
+        }
+    }
+    
+    // Store the combined energy and atom changes in parent
+    system_energy = total_energy;
+    
+    // Add the combined changed atoms to parent's history
+    if (!combined_changed_atoms.empty()) {
+        accepted_atoms_history.push_back(combined_changed_atoms);
+    }
+    
+    if (debug) {
+        std::cout << "[iterate_children] Total combined energy: " << total_energy << std::endl;
+        std::cout << "[iterate_children] Total changed atoms: " << combined_changed_atoms.size() << std::endl;
+    }
+    
+    return total_energy;
+}
+
+void Sim::resynchronize() {
+    if (children_simulations.empty()) {
+        std::cerr << "[resynchronize] No child simulations to resynchronize from" << std::endl;
+        return;
+    }
+    
+    // Create a map to track which grid locations should be updated
+    std::unordered_set<int> locations_to_update;
+    
+    // Collect all allowed sites from all children
+    for (const auto& child : children_simulations) {
+        for (int site : child->allowed_sites) {
+            locations_to_update.insert(site);
+        }
+    }
+    
+    // Update only the non-restricted locations
+    for (int location : locations_to_update) {
+        // Find which child owns this location
+        for (const auto& child : children_simulations) {
+            auto it = std::find(child->allowed_sites.begin(), child->allowed_sites.end(), location);
+            if (it != child->allowed_sites.end()) {
+                // This child owns this location, copy its state to parent
+                grid.array[location].cell_species = child->grid.array[location].cell_species;
+                grid.array[location].local_config = child->grid.array[location].local_config;
+                grid.array[location].cell_cluster_ID = child->grid.array[location].cell_cluster_ID;
+                grid.array[location].cell_type = child->grid.array[location].cell_type;
+                break;
+            }
+        }
+    }
+    
+    // Refresh local configurations for all updated locations and their neighbors
+    for (int location : locations_to_update) {
+        grid.refresh_local_config(location);
+        
+        // Also refresh neighbors
+        const auto& neighbors = grid.array[location].neighbor_indexes;
+        for (int neighbor : neighbors) {
+            if (neighbor >= 0 && neighbor < grid.Size * grid.Size) {
+                grid.refresh_local_config(neighbor);
+            }
+        }
+    }
+    
+    // Recalculate system energy after resynchronization
+    system_energy = compute_total_energy();
+    
+    std::cout << "[resynchronize] Updated " << locations_to_update.size() 
+              << " locations from child simulations" << std::endl;
+}
