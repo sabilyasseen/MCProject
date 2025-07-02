@@ -31,6 +31,12 @@ struct VectorVectorHash {
 // Global map for tested cluster configurations and their energies
 std::unordered_map<std::vector<std::vector<int>>, float, VectorVectorHash> tested_configurations;
 
+// Cluster stability monitoring variables
+bool trigger_partition = false;          // Boolean to enable/disable partition triggering
+float cluster_stability_threshold = 0.1f; // Threshold below which stability is considered low
+int streak_needed = 5;                   // Number of consecutive low stability values needed
+int current_streak = 0;                  // Current count of consecutive low stability values
+
 // Function declarations
 bool test_cluster_set_consistency(Grid& grid);
 bool test_interior_cell_properties(Grid& grid);
@@ -783,51 +789,93 @@ void display_cluster_composition(const Grid& grid) {
 }
 
 void validate_without_totals(Grid& grid) {
-    bool all_valid = true;
+    // List of all consistency tests
+    std::vector<std::function<bool(Grid&)>> tests = {
+        test_cluster_set_consistency,
+        test_interior_cell_properties,
+        test_boundary_cell_properties,
+        test_interior_cell_neighbors,
+        test_boundary_cell_neighbors,
+        test_cluster_sizes,
+        test_cluster_membership,
+        test_neighbor_count,
+        test_local_config_consistency
+    };
     
-    // Basic mechanics tests
-    bool mechanics_valid = true;
-    if (!test_neighbor_count(grid)) {
-        std::cout << "FAILED: Basic mechanics - Incorrect neighbor count" << std::endl;
-        mechanics_valid = false;
-        all_valid = false;
-    }
-    if (!test_local_config_consistency(grid)) {
-        std::cout << "FAILED: Basic mechanics - Local config inconsistency" << std::endl;
-        mechanics_valid = false;
-        all_valid = false;
-    }
-    
-    if (!mechanics_valid) {
-        std::cout << "Basic mechanics tests failed. Skipping cluster validation tests." << std::endl;
-        return;
-    }
-    
-    // Cluster validation tests
-    if (!test_cluster_set_consistency(grid)) {
-        all_valid = false;
-    }
-    if (!test_interior_cell_properties(grid)) {
-        all_valid = false;
-    }
-    if (!test_boundary_cell_properties(grid)) {
-        all_valid = false;
-    }
-    if (!test_interior_cell_neighbors(grid)) {
-        all_valid = false;
-    }
-    if (!test_boundary_cell_neighbors(grid)) {
-        all_valid = false;
-    }
-    if (!test_cluster_sizes(grid)) {
-        all_valid = false;
-    }
-    if (!test_cluster_membership(grid)) {
-        all_valid = false;
+    bool all_passed = true;
+    for (auto& test : tests) {
+        if (!test(grid)) {
+            all_passed = false;
+        }
     }
     
-    if (!all_valid) {
-        std::cout << "Some validation tests failed" << std::endl;
+    if (all_passed) {
+        std::cout << "All cluster consistency tests PASSED" << std::endl;
+    } else {
+        std::cout << "Some cluster consistency tests FAILED" << std::endl;
+    }
+}
+
+// Cluster stability calculation function
+float calculate_cluster_stability(Grid& grid) {
+    if (grid.num_clusters == 0) {
+        return 1.0f; // No clusters means perfect stability
+    }
+    
+    float total_stability = 0.0f;
+    int valid_clusters = 0;
+    
+    // Calculate stability for each cluster based on boundary/interior ratio
+    for (int i = 0; i < grid.num_clusters; i++) {
+        int total_boundary = 0;
+        int total_interior = 0;
+        
+        // Count boundary and interior cells for all species in this cluster
+        for (int species = 0; species < 2; species++) {
+            total_boundary += grid.clusters[i].boundary_cells[species].size();
+            total_interior += grid.clusters[i].interior_cells[species].size();
+        }
+        
+        int total_cluster_size = total_boundary + total_interior;
+        if (total_cluster_size > 0) {
+            // Stability is higher when there are more interior cells relative to boundary cells
+            // This gives a value between 0 and 1, where 1 is most stable (all interior)
+            float cluster_stability = static_cast<float>(total_interior) / static_cast<float>(total_cluster_size);
+            total_stability += cluster_stability;
+            valid_clusters++;
+        }
+    }
+    
+    // Return average stability across all clusters
+    return valid_clusters > 0 ? total_stability / valid_clusters : 1.0f;
+}
+
+// Cluster stability monitoring and partition triggering function
+void monitor_cluster_stability(Grid& grid) {
+    float stability = calculate_cluster_stability(grid);
+    
+    if (stability < cluster_stability_threshold) {
+        current_streak++;
+        std::cout << "Low cluster stability detected: " << stability 
+                  << " (streak: " << current_streak << "/" << streak_needed << ")" << std::endl;
+        
+        if (current_streak >= streak_needed && trigger_partition) {
+            std::cout << "Stability threshold breached for " << streak_needed 
+                      << " consecutive iterations. Triggering partition..." << std::endl;
+            
+            // Call partition function here
+            // Note: You would need to implement the actual partition function
+            // For now, we'll just reset the streak and print a message
+            std::cout << "PARTITION FUNCTION CALLED (implementation needed)" << std::endl;
+            current_streak = 0; // Reset streak after partitioning
+        }
+    } else {
+        // Reset streak if stability is above threshold
+        if (current_streak > 0) {
+            std::cout << "Cluster stability recovered: " << stability 
+                      << " (resetting streak)" << std::endl;
+        }
+        current_streak = 0;
     }
 }
 
@@ -972,6 +1020,10 @@ std::string run_and_save(std::string selection_string, int iterations, int clust
             //std::cout << "[DEBUG] Move rejected at iteration " << i << std::endl;
             sim.undo_move(move);
         }
+        
+        // Monitor cluster stability after each iteration
+        monitor_cluster_stability(sim.grid);
+        
         if (iterations >= 5 && (i + 1) % (iterations / 5) == 0) {
             int percent_complete = ((i + 1) * 20) / (iterations / 5);
             float current_acceptance_rate = (total_accepted * 100.0f) / (i + 1);
@@ -1053,6 +1105,10 @@ std::string run_and_save_delayed_rejection(std::string selection_string, int ite
         if (accepted) {
             total_accepted++;
         }
+        
+        // Monitor cluster stability after each iteration
+        monitor_cluster_stability(sim.grid);
+        
         if (iterations >= 5 && (i + 1) % (iterations / 5) == 0) {
             int percent_complete = ((i + 1) * 20) / (iterations / 5);
             float current_acceptance_rate = (total_accepted * 100.0f) / (i + 1);
