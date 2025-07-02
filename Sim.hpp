@@ -110,6 +110,31 @@
          void cluster_conditions_from_indices_matrix(const std::vector<std::vector<int>>& property_matrix, int tier_size = 1);
          // Build clusters from a matrix using rotation-only patterns (no inversions)
          void cluster_conditions_from_indices_matrix_uninverted(const std::vector<std::vector<int>>& property_matrix, int tier_size = 2);
+
+         // ===============================================
+         // NEW: OPTIMIZATION SYSTEM FUNCTIONALITY
+         // ===============================================
+         
+         // Vector to store optimizer simulation objects
+         std::vector<Sim> optimizer_sims;
+         
+         // Core optimization functions
+         void run_cluster_seed_optimization(int iterations = 100, bool debug = false);
+         std::vector<std::vector<std::vector<int>>> generate_cluster_combinations(bool debug = false);
+         void initialize_optimizer_sims(const std::vector<std::vector<std::vector<int>>>& combinations, bool debug = false);
+         void run_optimizer_tests(int iterations, bool debug = false);
+         int select_best_optimizer_sim(bool debug = false);
+         void apply_best_cluster_seed(bool debug = false);
+         
+         // Helper functions for combination generation
+         std::vector<std::vector<int>> vectorize_cluster_seed(bool debug = false);
+         std::vector<std::vector<std::vector<int>>> create_combinations_from_entries(const std::vector<std::vector<int>>& entries, bool use_inversions, bool debug = false);
+         void distribute_properties_evenly(std::vector<std::vector<std::vector<int>>>& combinations, bool debug = false);
+         
+         // Utility functions
+         void copy_parent_properties(Sim& child_sim, bool debug = false);
+         void debug_print_combination(const std::vector<std::vector<int>>& combination, int index, bool debug = false);
+         void debug_print_optimization_summary(int best_index, bool debug = false);
     };
 
 

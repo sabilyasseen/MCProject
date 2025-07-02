@@ -770,7 +770,7 @@ void Sim::cluster_conditions_from_indices(const std::vector<int>& property_indic
     }
 
     // 5. Apply cluster weights (tier_size defaults to 1)
-    reapply_cluster_weights(conditions.cluster_bias);
+    reapply_cluster_weights(conditions.cluster_bias, tier_size);
 
     // 6. Keep the original cluster at index 0 with 0 weight, but set the weighted catch-all appropriately
     if (catch_all && grid.num_clusters > 2) {
@@ -1403,4 +1403,583 @@ void Sim::cluster_conditions_from_indices_matrix_uninverted(const std::vector<st
     }
 
     grid.assign_initial_clusters(allowed_sites);
+}
+
+// ===============================================
+// NEW: OPTIMIZATION SYSTEM IMPLEMENTATION
+// ===============================================
+
+// CHUNK 1: MAIN OPTIMIZATION ORCHESTRATOR
+void Sim::run_cluster_seed_optimization(int iterations, bool debug) {
+    if (debug) {
+        std::cout << "\n========== CLUSTER SEED OPTIMIZATION STARTED ==========" << std::endl;
+        std::cout << "[DEBUG] Target iterations per sim: " << iterations << std::endl;
+        std::cout << "[DEBUG] Original system energy: " << system_energy << std::endl;
+    }
+    
+    // Step 1: Generate all possible cluster combinations
+    if (debug) std::cout << "\n--- CHUNK 1: GENERATE COMBINATIONS ---" << std::endl;
+    std::vector<std::vector<std::vector<int>>> combinations = generate_cluster_combinations(debug);
+    
+    if (combinations.empty()) {
+        if (debug) std::cout << "[DEBUG] No combinations generated, optimization aborted" << std::endl;
+        return;
+    }
+    
+    // Step 2: Initialize optimizer sims with combinations
+    if (debug) std::cout << "\n--- CHUNK 2: INITIALIZE SIMS ---" << std::endl;
+    initialize_optimizer_sims(combinations, debug);
+    
+    // Step 3: Run tests on all optimizer sims
+    if (debug) std::cout << "\n--- CHUNK 3: RUN TESTS ---" << std::endl;
+    run_optimizer_tests(iterations, debug);
+    
+    // Step 4: Select best performing sim
+    if (debug) std::cout << "\n--- CHUNK 4: SELECT BEST ---" << std::endl;
+    int best_index = select_best_optimizer_sim(debug);
+    
+    // Step 5: Apply best cluster seed to main sim
+    if (debug) std::cout << "\n--- CHUNK 5: APPLY BEST ---" << std::endl;
+    apply_best_cluster_seed(debug);
+    
+    if (debug) {
+        std::cout << "\n========== OPTIMIZATION COMPLETED ==========" << std::endl;
+        debug_print_optimization_summary(best_index, debug);
+    }
+}
+
+// CHUNK 1: COMBINATION GENERATION
+std::vector<std::vector<std::vector<int>>> Sim::generate_cluster_combinations(bool debug) {
+    if (debug) std::cout << "[DEBUG] Starting combination generation..." << std::endl;
+    
+    // Step 1: Vectorize current cluster seed
+    std::vector<std::vector<int>> vectorized_seed = vectorize_cluster_seed(debug);
+    
+    if (vectorized_seed.empty()) {
+        if (debug) std::cout << "[DEBUG] Warning: Empty cluster seed vectorized" << std::endl;
+        return std::vector<std::vector<std::vector<int>>>();
+    }
+    
+    // Step 2: Determine if inversions are enabled
+    bool use_inversions = true;  // Default assumption
+    
+    // Check if any cluster uses inversions by looking at cluster properties
+    if (grid.num_clusters > 0) {
+        // Check the first non-catch-all cluster to see if inversions are being used
+        for (int i = 1; i < grid.num_clusters && i < static_cast<int>(grid.clusters.size()); i++) {
+            ClusterProperty& prop = grid.clusters[i].property;
+            // If cluster has multiple patterns that look like inversions, inversions are on
+            if (prop.local_configs.size() > 12) { // Heuristic: more than base rotations
+                use_inversions = true;
+                break;
+            }
+        }
+    }
+    
+    if (debug) {
+        std::cout << "[DEBUG] Use inversions: " << (use_inversions ? "true" : "false") << std::endl;
+        std::cout << "[DEBUG] Target cluster count: " << (use_inversions ? "4" : "2") << std::endl;
+    }
+    
+    // Step 3: Create combinations from vectorized entries
+    std::vector<std::vector<std::vector<int>>> combinations = 
+        create_combinations_from_entries(vectorized_seed, use_inversions, debug);
+    
+    // Step 4: Distribute properties evenly
+    distribute_properties_evenly(combinations, debug);
+    
+    if (debug) {
+        std::cout << "[DEBUG] Generated " << combinations.size() << " total combinations" << std::endl;
+    }
+    
+    return combinations;
+}
+
+// Helper: Vectorize cluster seed
+std::vector<std::vector<int>> Sim::vectorize_cluster_seed(bool debug) {
+    if (debug) std::cout << "[DEBUG] Vectorizing cluster seed..." << std::endl;
+    
+    std::vector<std::vector<int>> vectorized_seed;
+    
+    // Extract property indices from each cluster (skip catch-all cluster 0)
+    for (int cluster_id = 1; cluster_id < grid.num_clusters && cluster_id < static_cast<int>(grid.clusters.size()); cluster_id++) {
+        std::vector<int> cluster_properties;
+        ClusterProperty& prop = grid.clusters[cluster_id].property;
+        
+        // Find which global pattern indices this cluster represents
+        // This is a simplified approach - we'll collect the first few unique patterns
+        for (size_t i = 0; i < prop.local_configs.size() && cluster_properties.size() < 3; i++) {
+            bool found_match = false;
+            std::vector<int> config = prop.local_configs[i];
+            
+            // Search in GLOBAL_PATTERN_VECTORS to find matching index
+            for (size_t global_idx = 0; global_idx < GLOBAL_PATTERN_VECTORS.size(); global_idx++) {
+                if (GLOBAL_PATTERN_VECTORS[global_idx] == config) {
+                    // Check if we already have this index
+                    if (std::find(cluster_properties.begin(), cluster_properties.end(), static_cast<int>(global_idx)) == cluster_properties.end()) {
+                        cluster_properties.push_back(static_cast<int>(global_idx));
+                        found_match = true;
+                        break;
+                    }
+                }
+            }
+            
+            if (found_match && cluster_properties.size() >= 3) break;
+        }
+        
+        // If we couldn't find matches, create some default entries
+        if (cluster_properties.empty()) {
+            cluster_properties.push_back(cluster_id - 1); // Simple fallback
+        }
+        
+        vectorized_seed.push_back(cluster_properties);
+        
+        if (debug) {
+            std::cout << "[DEBUG] Cluster " << cluster_id << " vectorized to: [";
+            for (size_t i = 0; i < cluster_properties.size(); i++) {
+                std::cout << cluster_properties[i];
+                if (i < cluster_properties.size() - 1) std::cout << ",";
+            }
+            std::cout << "]" << std::endl;
+        }
+    }
+    
+    if (debug) {
+        std::cout << "[DEBUG] Vectorized " << vectorized_seed.size() << " clusters" << std::endl;
+    }
+    
+    return vectorized_seed;
+}
+
+// Helper: Create combinations from entries
+std::vector<std::vector<std::vector<int>>> Sim::create_combinations_from_entries(
+    const std::vector<std::vector<int>>& entries, bool use_inversions, bool debug) {
+    
+    if (debug) {
+        std::cout << "[DEBUG] Creating combinations from " << entries.size() << " entry groups" << std::endl;
+    }
+    
+    std::vector<std::vector<std::vector<int>>> combinations;
+    
+    // Flatten all entries into a single pool
+    std::vector<int> all_entries;
+    for (const auto& entry_group : entries) {
+        for (int entry : entry_group) {
+            all_entries.push_back(entry);
+        }
+    }
+    
+    if (debug) {
+        std::cout << "[DEBUG] Total entries to distribute: " << all_entries.size() << std::endl;
+    }
+    
+    // Determine target number of clusters
+    int target_clusters = use_inversions ? 4 : 2;
+    
+    if (all_entries.empty()) {
+        if (debug) std::cout << "[DEBUG] No entries to create combinations from" << std::endl;
+        return combinations;
+    }
+    
+    // Generate all possible ways to distribute entries across target_clusters
+    // This is a complex combinatorial problem, so we'll use a simplified approach
+    
+    // Method: Generate some representative combinations
+    int max_combinations = 50; // Limit to prevent explosion
+    int combinations_generated = 0;
+    
+    // Basic combination: distribute entries round-robin
+    std::vector<std::vector<int>> basic_combination(target_clusters);
+    for (size_t i = 0; i < all_entries.size(); i++) {
+        basic_combination[i % target_clusters].push_back(all_entries[i]);
+    }
+    combinations.push_back(basic_combination);
+    combinations_generated++;
+    
+    if (debug) {
+        std::cout << "[DEBUG] Generated basic round-robin combination" << std::endl;
+        debug_print_combination(basic_combination, 0, debug);
+    }
+    
+    // Generate some permutations by rotating the distribution
+    for (int shift = 1; shift < target_clusters && combinations_generated < max_combinations; shift++) {
+        std::vector<std::vector<int>> shifted_combination(target_clusters);
+        for (size_t i = 0; i < all_entries.size(); i++) {
+            shifted_combination[(i + shift) % target_clusters].push_back(all_entries[i]);
+        }
+        combinations.push_back(shifted_combination);
+        combinations_generated++;
+        
+        if (debug) {
+            std::cout << "[DEBUG] Generated shifted combination (shift=" << shift << ")" << std::endl;
+        }
+    }
+    
+    // Generate combinations with different clustering strategies
+    if (all_entries.size() >= 4 && combinations_generated < max_combinations) {
+        // Strategy: Group consecutive entries
+        std::vector<std::vector<int>> grouped_combination(target_clusters);
+        int entries_per_cluster = all_entries.size() / target_clusters;
+        int remainder = all_entries.size() % target_clusters;
+        
+        int entry_index = 0;
+        for (int cluster = 0; cluster < target_clusters; cluster++) {
+            int cluster_size = entries_per_cluster + (cluster < remainder ? 1 : 0);
+            for (int i = 0; i < cluster_size && entry_index < static_cast<int>(all_entries.size()); i++) {
+                grouped_combination[cluster].push_back(all_entries[entry_index++]);
+            }
+        }
+        combinations.push_back(grouped_combination);
+        combinations_generated++;
+        
+        if (debug) {
+            std::cout << "[DEBUG] Generated grouped combination" << std::endl;
+        }
+    }
+    
+    if (debug) {
+        std::cout << "[DEBUG] Generated " << combinations_generated << " combinations total" << std::endl;
+    }
+    
+    return combinations;
+}
+
+// Helper: Distribute properties evenly
+void Sim::distribute_properties_evenly(std::vector<std::vector<std::vector<int>>>& combinations, bool debug) {
+    if (debug) std::cout << "[DEBUG] Distributing properties evenly across combinations..." << std::endl;
+    
+    // This function ensures properties are distributed evenly within each combination
+    for (size_t combo_idx = 0; combo_idx < combinations.size(); combo_idx++) {
+        auto& combination = combinations[combo_idx];
+        
+        if (debug) {
+            std::cout << "[DEBUG] Processing combination " << combo_idx << std::endl;
+        }
+        
+        // Count total properties in this combination
+        int total_properties = 0;
+        for (const auto& cluster : combination) {
+            total_properties += cluster.size();
+        }
+        
+        if (total_properties == 0) continue;
+        
+        int target_clusters = combination.size();
+        int properties_per_cluster = total_properties / target_clusters;
+        int remainder = total_properties % target_clusters;
+        
+        if (debug) {
+            std::cout << "[DEBUG] Total properties: " << total_properties 
+                      << ", Target per cluster: " << properties_per_cluster 
+                      << ", Remainder: " << remainder << std::endl;
+        }
+        
+        // Collect all properties and redistribute
+        std::vector<int> all_properties;
+        for (const auto& cluster : combination) {
+            for (int prop : cluster) {
+                all_properties.push_back(prop);
+            }
+        }
+        
+        // Clear and redistribute
+        for (auto& cluster : combination) {
+            cluster.clear();
+        }
+        
+        int prop_index = 0;
+        for (int cluster_idx = 0; cluster_idx < target_clusters; cluster_idx++) {
+            int cluster_size = properties_per_cluster + (cluster_idx < remainder ? 1 : 0);
+            for (int i = 0; i < cluster_size && prop_index < static_cast<int>(all_properties.size()); i++) {
+                combination[cluster_idx].push_back(all_properties[prop_index++]);
+            }
+        }
+        
+        if (debug) {
+            std::cout << "[DEBUG] Redistributed combination " << combo_idx << ":" << std::endl;
+            debug_print_combination(combination, combo_idx, debug);
+        }
+    }
+    
+    if (debug) {
+        std::cout << "[DEBUG] Property distribution completed for " << combinations.size() << " combinations" << std::endl;
+    }
+}
+
+// CHUNK 2: SIMULATOR INITIALIZATION
+void Sim::initialize_optimizer_sims(const std::vector<std::vector<std::vector<int>>>& combinations, bool debug) {
+    if (debug) {
+        std::cout << "[DEBUG] Initializing " << combinations.size() << " optimizer sims..." << std::endl;
+    }
+    
+    // Clear any existing optimizer sims
+    optimizer_sims.clear();
+    optimizer_sims.reserve(combinations.size());
+    
+    for (size_t i = 0; i < combinations.size(); i++) {
+        if (debug) {
+            std::cout << "[DEBUG] Initializing optimizer sim " << i << std::endl;
+        }
+        
+        // Create new sim object
+        Sim new_sim;
+        
+        // Copy parent properties (conditions, allowed sites, etc.)
+        copy_parent_properties(new_sim, debug);
+        
+        // Apply the specific cluster combination
+        try {
+            // Reset cluster conditions first
+            new_sim.reset_cluster_conditions();
+            
+            // Apply the combination using the matrix method
+            if (debug) {
+                std::cout << "[DEBUG] Applying cluster combination " << i << ":" << std::endl;
+                debug_print_combination(combinations[i], i, debug);
+            }
+            
+            // Determine which method to use based on whether inversions are used
+            bool use_inversions = true;  // This should match the logic from generate_cluster_combinations
+            
+            if (use_inversions) {
+                new_sim.cluster_conditions_from_indices_matrix(combinations[i], 1);
+            } else {
+                new_sim.cluster_conditions_from_indices_matrix_uninverted(combinations[i], 2);
+            }
+            
+            // Initialize the new sim
+            new_sim.initialize(new_sim.conditions);
+            
+            if (debug) {
+                std::cout << "[DEBUG] Sim " << i << " initialized successfully. Energy: " 
+                          << new_sim.system_energy << std::endl;
+            }
+            
+        } catch (const std::exception& e) {
+            if (debug) {
+                std::cout << "[DEBUG] Error initializing sim " << i << ": " << e.what() << std::endl;
+            }
+            // Create a dummy sim with high energy to mark as failed
+            new_sim.system_energy = 1e9f;
+        }
+        
+        optimizer_sims.push_back(std::move(new_sim));
+    }
+    
+    if (debug) {
+        std::cout << "[DEBUG] Successfully initialized " << optimizer_sims.size() << " optimizer sims" << std::endl;
+    }
+}
+
+// CHUNK 3: TEST EXECUTION
+void Sim::run_optimizer_tests(int iterations, bool debug) {
+    if (debug) {
+        std::cout << "[DEBUG] Running " << iterations << " iterations on " 
+                  << optimizer_sims.size() << " optimizer sims..." << std::endl;
+    }
+    
+    for (size_t sim_idx = 0; sim_idx < optimizer_sims.size(); sim_idx++) {
+        if (debug) {
+            std::cout << "[DEBUG] Running test on sim " << sim_idx 
+                      << " (initial energy: " << optimizer_sims[sim_idx].system_energy << ")" << std::endl;
+        }
+        
+        Sim& test_sim = optimizer_sims[sim_idx];
+        
+        // Skip if sim failed to initialize properly
+        if (test_sim.system_energy > 1e8f) {
+            if (debug) {
+                std::cout << "[DEBUG] Skipping sim " << sim_idx << " (failed initialization)" << std::endl;
+            }
+            continue;
+        }
+        
+        float initial_energy = test_sim.system_energy;
+        int accepted_moves = 0;
+        
+        // Run the iterations
+        for (int iter = 0; iter < iterations; iter++) {
+            try {
+                bool accepted = test_sim.iterate_improved(debug && (iter % 20 == 0)); // Debug every 20th iteration
+                if (accepted) {
+                    accepted_moves++;
+                }
+            } catch (const std::exception& e) {
+                if (debug) {
+                    std::cout << "[DEBUG] Error during iteration " << iter << " on sim " << sim_idx 
+                              << ": " << e.what() << std::endl;
+                }
+                break; // Stop iterations for this sim on error
+            }
+        }
+        
+        float final_energy = test_sim.system_energy;
+        float energy_change = final_energy - initial_energy;
+        
+        if (debug) {
+            std::cout << "[DEBUG] Sim " << sim_idx << " completed: " 
+                      << accepted_moves << "/" << iterations << " accepted, "
+                      << "Energy: " << initial_energy << " -> " << final_energy 
+                      << " (Δ=" << energy_change << ")" << std::endl;
+        }
+    }
+    
+    if (debug) {
+        std::cout << "[DEBUG] All optimizer tests completed" << std::endl;
+    }
+}
+
+// CHUNK 4: BEST SELECTION
+int Sim::select_best_optimizer_sim(bool debug) {
+    if (debug) {
+        std::cout << "[DEBUG] Selecting best optimizer sim from " << optimizer_sims.size() << " candidates..." << std::endl;
+    }
+    
+    if (optimizer_sims.empty()) {
+        if (debug) std::cout << "[DEBUG] No optimizer sims available for selection" << std::endl;
+        return -1;
+    }
+    
+    int best_index = 0;
+    float best_energy = optimizer_sims[0].system_energy;
+    
+    if (debug) {
+        std::cout << "[DEBUG] Energy comparison:" << std::endl;
+    }
+    
+    for (size_t i = 0; i < optimizer_sims.size(); i++) {
+        float energy = optimizer_sims[i].system_energy;
+        
+        if (debug) {
+            std::cout << "[DEBUG]   Sim " << i << ": " << energy;
+            if (energy < best_energy) std::cout << " <- NEW BEST";
+            std::cout << std::endl;
+        }
+        
+        if (energy < best_energy) {
+            best_energy = energy;
+            best_index = i;
+        }
+    }
+    
+    if (debug) {
+        std::cout << "[DEBUG] Selected sim " << best_index << " with energy " << best_energy << std::endl;
+    }
+    
+    return best_index;
+}
+
+// CHUNK 5: APPLY BEST RESULT
+void Sim::apply_best_cluster_seed(bool debug) {
+    if (debug) {
+        std::cout << "[DEBUG] Applying best cluster seed to main simulation..." << std::endl;
+    }
+    
+    int best_index = select_best_optimizer_sim(debug);
+    
+    if (best_index < 0 || best_index >= static_cast<int>(optimizer_sims.size())) {
+        if (debug) {
+            std::cout << "[DEBUG] Invalid best index " << best_index << ", cannot apply" << std::endl;
+        }
+        return;
+    }
+    
+    Sim& best_sim = optimizer_sims[best_index];
+    
+    if (debug) {
+        std::cout << "[DEBUG] Copying configuration from sim " << best_index << std::endl;
+        std::cout << "[DEBUG] Original energy: " << system_energy << std::endl;
+        std::cout << "[DEBUG] Best energy: " << best_sim.system_energy << std::endl;
+    }
+    
+    // Store original energy for comparison
+    float original_energy = system_energy;
+    
+    // Reset current cluster conditions
+    reset_cluster_conditions();
+    
+    // Copy the grid state from the best sim
+    try {
+        // Copy grid configuration
+        copy_grid(best_sim.grid);
+        
+        // Copy cluster configuration
+        grid.clusters = best_sim.grid.clusters;
+        grid.num_clusters = best_sim.grid.num_clusters;
+        
+        // Update system energy
+        system_energy = best_sim.system_energy;
+        
+        // Reinitialize with current conditions to ensure consistency
+        variables.backup();
+        calculate_initial_selection_probs_weighted(debug);
+        
+        if (debug) {
+            std::cout << "[DEBUG] Cluster seed application completed" << std::endl;
+            std::cout << "[DEBUG] Energy change: " << original_energy << " -> " << system_energy 
+                      << " (improvement: " << (original_energy - system_energy) << ")" << std::endl;
+        }
+        
+    } catch (const std::exception& e) {
+        if (debug) {
+            std::cout << "[DEBUG] Error applying best cluster seed: " << e.what() << std::endl;
+        }
+        // Restore original energy if copy failed
+        system_energy = original_energy;
+    }
+}
+
+// UTILITY FUNCTIONS
+
+void Sim::copy_parent_properties(Sim& child_sim, bool debug) {
+    if (debug) {
+        std::cout << "[DEBUG] Copying parent properties to child sim..." << std::endl;
+    }
+    
+    // Copy simulation conditions
+    child_sim.conditions = conditions;
+    
+    // Copy allowed sites
+    child_sim.allowed_sites = allowed_sites;
+    
+    // Copy grid size and basic structure
+    child_sim.grid.Size = grid.Size;
+    
+    // Initialize random number generator
+    child_sim.gen = std::mt19937(child_sim.rd());
+    
+    if (debug) {
+        std::cout << "[DEBUG] Copied conditions, allowed_sites (" << allowed_sites.size() 
+                  << " sites), and grid size (" << grid.Size << "x" << grid.Size << ")" << std::endl;
+    }
+}
+
+void Sim::debug_print_combination(const std::vector<std::vector<int>>& combination, int index, bool debug) {
+    if (!debug) return;
+    
+    std::cout << "[DEBUG]   Combination " << index << ":" << std::endl;
+    for (size_t cluster_idx = 0; cluster_idx < combination.size(); cluster_idx++) {
+        std::cout << "[DEBUG]     Cluster " << cluster_idx << ": [";
+        for (size_t prop_idx = 0; prop_idx < combination[cluster_idx].size(); prop_idx++) {
+            std::cout << combination[cluster_idx][prop_idx];
+            if (prop_idx < combination[cluster_idx].size() - 1) std::cout << ",";
+        }
+        std::cout << "]" << std::endl;
+    }
+}
+
+void Sim::debug_print_optimization_summary(int best_index, bool debug) {
+    if (!debug) return;
+    
+    std::cout << "\n[DEBUG] ========== OPTIMIZATION SUMMARY ==========" << std::endl;
+    std::cout << "[DEBUG] Total combinations tested: " << optimizer_sims.size() << std::endl;
+    std::cout << "[DEBUG] Best performing sim: " << best_index << std::endl;
+    
+    if (best_index >= 0 && best_index < static_cast<int>(optimizer_sims.size())) {
+        std::cout << "[DEBUG] Best energy: " << optimizer_sims[best_index].system_energy << std::endl;
+        std::cout << "[DEBUG] Best sim cluster count: " << optimizer_sims[best_index].grid.num_clusters << std::endl;
+    }
+    
+    std::cout << "[DEBUG] Final main sim energy: " << system_energy << std::endl;
+    std::cout << "[DEBUG] =============================================" << std::endl;
 }

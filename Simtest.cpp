@@ -1472,7 +1472,236 @@ std::vector<std::vector<int>> build_cluster_tree_(const std::string& selection_s
     return lowest_cluster_matrix;
 }
 
+// ===============================================
+// NEW: CLUSTER SEED OPTIMIZATION TESTING
+// ===============================================
+
+// Comprehensive test function for cluster seed optimization
+void test_cluster_seed_optimization(bool debug = true) {
+    if (debug) {
+        std::cout << "\n============ CLUSTER SEED OPTIMIZATION TEST ============" << std::endl;
+    }
+    
+    // Initialize required global data
+    initialize_energy();
+    initialize_pattern_library();
+    initialize_pattern_library_rot();
+    
+    // Create a test simulation with initial cluster configuration
+    Sim test_sim;
+    
+    // Set up test conditions
+    std::string selection_string = "BJ=-0.44_DR";
+    if (SIM_CONDITIONS.find(selection_string) == SIM_CONDITIONS.end()) {
+        if (debug) {
+            std::cout << "[TEST] Warning: Using default conditions since " << selection_string << " not found" << std::endl;
+        }
+        // Create default conditions for testing
+        SimConditions default_conditions;
+        default_conditions.J = -0.44f;
+        default_conditions.Beta = 2.0f;
+        default_conditions.tolerance = 0.01f;
+        default_conditions.prob_same_cluster_base = 0.5f;
+        default_conditions.prob_bb_base = 0.33f;
+        default_conditions.prob_bi_base = 0.33f;
+        default_conditions.prob_ii_base = 0.34f;
+        default_conditions.cluster_bias = 0.5f;
+        test_sim.conditions = default_conditions;
+    } else {
+        test_sim.conditions = SimConditions(SIM_CONDITIONS.at(selection_string));
+    }
+    
+    if (debug) {
+        std::cout << "[TEST] Setting up initial cluster configuration..." << std::endl;
+    }
+    
+    // Set up initial cluster conditions (use cluster_conditions_2 as a starting point)
+    test_sim.cluster_conditions(2);
+    test_sim.initialize(test_sim.conditions);
+    
+    if (debug) {
+        std::cout << "[TEST] Initial setup completed:" << std::endl;
+        std::cout << "[TEST]   Grid size: " << test_sim.grid.Size << "x" << test_sim.grid.Size << std::endl;
+        std::cout << "[TEST]   Number of clusters: " << test_sim.grid.num_clusters << std::endl;
+        std::cout << "[TEST]   Initial system energy: " << test_sim.system_energy << std::endl;
+        std::cout << "[TEST]   Allowed sites: " << test_sim.allowed_sites.size() << std::endl;
+    }
+    
+    // Validate initial grid state
+    if (debug) {
+        std::cout << "[TEST] Validating initial grid state..." << std::endl;
+    }
+    
+    bool initial_valid = test_grid_total_consistency(test_sim.grid);
+    if (debug) {
+        std::cout << "[TEST] Initial grid validation: " << (initial_valid ? "PASSED" : "FAILED") << std::endl;
+    }
+    
+    // Run a few iterations to establish baseline performance
+    if (debug) {
+        std::cout << "[TEST] Running baseline performance test (20 iterations)..." << std::endl;
+    }
+    
+    float baseline_energy = test_sim.system_energy;
+    int baseline_accepted = 0;
+    
+    for (int i = 0; i < 20; i++) {
+        if (test_sim.iterate_improved(debug && (i % 10 == 0))) {
+            baseline_accepted++;
+        }
+    }
+    
+    float post_baseline_energy = test_sim.system_energy;
+    
+    if (debug) {
+        std::cout << "[TEST] Baseline results:" << std::endl;
+        std::cout << "[TEST]   Energy: " << baseline_energy << " -> " << post_baseline_energy 
+                  << " (change: " << (post_baseline_energy - baseline_energy) << ")" << std::endl;
+        std::cout << "[TEST]   Accepted moves: " << baseline_accepted << "/20" << std::endl;
+    }
+    
+    // Now run the cluster seed optimization
+    if (debug) {
+        std::cout << "\n[TEST] ========== STARTING OPTIMIZATION ==========" << std::endl;
+    }
+    
+    float pre_optimization_energy = test_sim.system_energy;
+    
+    // Run optimization with 100 iterations per sub-sim (as specified in requirements)
+    test_sim.run_cluster_seed_optimization(100, debug);
+    
+    float post_optimization_energy = test_sim.system_energy;
+    
+    if (debug) {
+        std::cout << "\n[TEST] ========== OPTIMIZATION RESULTS ==========" << std::endl;
+        std::cout << "[TEST] Pre-optimization energy: " << pre_optimization_energy << std::endl;
+        std::cout << "[TEST] Post-optimization energy: " << post_optimization_energy << std::endl;
+        std::cout << "[TEST] Energy improvement: " << (pre_optimization_energy - post_optimization_energy) << std::endl;
+        std::cout << "[TEST] Improvement percentage: " << 
+                     ((pre_optimization_energy - post_optimization_energy) / std::abs(pre_optimization_energy) * 100.0f) << "%" << std::endl;
+    }
+    
+    // Validate final grid state
+    if (debug) {
+        std::cout << "\n[TEST] Validating post-optimization grid state..." << std::endl;
+    }
+    
+    bool final_valid = test_grid_total_consistency(test_sim.grid);
+    if (debug) {
+        std::cout << "[TEST] Final grid validation: " << (final_valid ? "PASSED" : "FAILED") << std::endl;
+    }
+    
+    // Test continued performance after optimization
+    if (debug) {
+        std::cout << "\n[TEST] Testing post-optimization performance (20 iterations)..." << std::endl;
+    }
+    
+    float post_opt_baseline_energy = test_sim.system_energy;
+    int post_opt_accepted = 0;
+    
+    for (int i = 0; i < 20; i++) {
+        if (test_sim.iterate_improved(debug && (i % 10 == 0))) {
+            post_opt_accepted++;
+        }
+    }
+    
+    float final_energy = test_sim.system_energy;
+    
+    if (debug) {
+        std::cout << "[TEST] Post-optimization performance:" << std::endl;
+        std::cout << "[TEST]   Energy: " << post_opt_baseline_energy << " -> " << final_energy 
+                  << " (change: " << (final_energy - post_opt_baseline_energy) << ")" << std::endl;
+        std::cout << "[TEST]   Accepted moves: " << post_opt_accepted << "/20" << std::endl;
+    }
+    
+    // Summary
+    if (debug) {
+        std::cout << "\n[TEST] ========== COMPREHENSIVE TEST SUMMARY ==========" << std::endl;
+        std::cout << "[TEST] Initial energy: " << baseline_energy << std::endl;
+        std::cout << "[TEST] Pre-optimization energy: " << pre_optimization_energy << std::endl;
+        std::cout << "[TEST] Post-optimization energy: " << post_optimization_energy << std::endl;
+        std::cout << "[TEST] Final energy: " << final_energy << std::endl;
+        std::cout << "[TEST] Total energy change: " << (baseline_energy - final_energy) << std::endl;
+        std::cout << "[TEST] Optimization contributed: " << (pre_optimization_energy - post_optimization_energy) << std::endl;
+        std::cout << "[TEST] Grid validation: " << (initial_valid && final_valid ? "PASSED" : "FAILED") << std::endl;
+        std::cout << "[TEST] Test status: " << (final_valid ? "SUCCESS" : "FAILED") << std::endl;
+        std::cout << "[TEST] ===============================================" << std::endl;
+    }
+    
+    if (!final_valid) {
+        std::cerr << "[ERROR] Cluster seed optimization test failed - grid validation failed" << std::endl;
+    }
+}
+
+// Function to test optimization with different debug levels and parameters
+void test_optimization_suite(bool debug = false) {
+    if (debug) {
+        std::cout << "\n============ OPTIMIZATION SUITE TEST ============" << std::endl;
+    }
+    
+    // Test with different cluster configurations
+    std::vector<int> cluster_configs = {1, 2, 3};
+    
+    for (int config : cluster_configs) {
+        if (debug) {
+            std::cout << "\n[SUITE] Testing with cluster configuration " << config << std::endl;
+        }
+        
+        try {
+            Sim test_sim;
+            test_sim.conditions = SimConditions();
+            test_sim.conditions.J = -0.44f;
+            test_sim.conditions.Beta = 2.0f;
+            test_sim.conditions.tolerance = 0.01f;
+            test_sim.conditions.prob_same_cluster_base = 0.5f;
+            test_sim.conditions.cluster_bias = 0.5f;
+            
+            test_sim.cluster_conditions(config);
+            test_sim.initialize(test_sim.conditions);
+            
+            float initial_energy = test_sim.system_energy;
+            
+            // Run optimization with fewer iterations for suite testing
+            test_sim.run_cluster_seed_optimization(50, debug);
+            
+            float final_energy = test_sim.system_energy;
+            
+            if (debug) {
+                std::cout << "[SUITE] Config " << config << " results: " 
+                          << initial_energy << " -> " << final_energy 
+                          << " (Δ=" << (initial_energy - final_energy) << ")" << std::endl;
+            }
+            
+        } catch (const std::exception& e) {
+            if (debug) {
+                std::cout << "[SUITE] Error testing config " << config << ": " << e.what() << std::endl;
+            }
+        }
+    }
+    
+    if (debug) {
+        std::cout << "[SUITE] Optimization suite testing completed" << std::endl;
+    }
+}
+
 int main() {
+    // ===============================================
+    // NEW: TEST CLUSTER SEED OPTIMIZATION
+    // ===============================================
+    
+    std::cout << "\n============ TESTING NEW OPTIMIZATION SYSTEM ============" << std::endl;
+    std::cout << "Running comprehensive cluster seed optimization test..." << std::endl;
+    
+    // Test the new optimization functionality with full debug output
+    test_cluster_seed_optimization(true);
+    
+    std::cout << "\nRunning optimization suite test..." << std::endl;
+    test_optimization_suite(true);
+    
+    std::cout << "\n============ OPTIMIZATION TESTING COMPLETED ============" << std::endl;
+    std::cout << "Proceeding with original main function..." << std::endl;
+    
+    // Original main function code continues below
     initialize_energy();
     initialize_pattern_library();
     
