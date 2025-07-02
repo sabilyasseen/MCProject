@@ -998,8 +998,8 @@ std::string run_and_save(std::string selection_string, int iterations, int clust
     }
     std::ostringstream scp_signifier;
     scp_signifier << std::fixed << std::setprecision(2) << "_scp" << same_cluster_prob;
-    std::string results_file = selection_string + "_" + cluster_type_str + tol_signifier.str() + scp_signifier.str() + ".csv";
-    std::string config_file = selection_string + "_" + cluster_type_str + tol_signifier.str() + scp_signifier.str() + "_GridConfig.csv";
+    std::string results_file = "outputs/" + selection_string + "_" + cluster_type_str + tol_signifier.str() + scp_signifier.str() + ".csv";
+    std::string config_file = "outputs/" + selection_string + "_" + cluster_type_str + tol_signifier.str() + scp_signifier.str() + "_GridConfig.csv";
     std::cout << "[DEBUG] Saving results to CSV: " << results_file << std::endl;
     sim.save_results_to_csv(results_file);
     sim.save_grid_configuration_to_csv(config_file);
@@ -1077,8 +1077,8 @@ std::string run_and_save_delayed_rejection(std::string selection_string, int ite
     }
     std::ostringstream scp_signifier;
     scp_signifier << std::fixed << std::setprecision(2) << "_scp" << same_cluster_prob;
-    std::string results_file = selection_string  +"_"+ cluster_type_str + tol_signifier.str() + scp_signifier.str() + ".csv";
-    std::string config_file = selection_string  +"_"+ cluster_type_str + tol_signifier.str() + scp_signifier.str() + "_GridConfig.csv";
+    std::string results_file = "outputs/" + selection_string  +"_"+ cluster_type_str + tol_signifier.str() + scp_signifier.str() + ".csv";
+    std::string config_file = "outputs/" + selection_string  +"_"+ cluster_type_str + tol_signifier.str() + scp_signifier.str() + "_GridConfig.csv";
     std::cout << "[DEBUG] Saving delayed rejection results to CSV: " << results_file << std::endl;
     sim.save_results_to_csv(results_file);
     sim.save_grid_configuration_to_csv(config_file);
@@ -1515,7 +1515,7 @@ int main() {
     
     // Run cluster tree optimization with rotation-only patterns (no inversions)
     // std::vector<std::vector<int>> optimal_cluster_config_rot = build_cluster_tree_("BJ=-0.44_DR", 4, 4, 2, 2, 0.5f, 0.0f, 10, 10000, false, true);
-    int iterations = 2000;
+    int iterations = 50;
     std::vector<std::string> all_filenames;
     std::cout << "\n============ RUNNING KAWASAKI SIMULATIONS ============" << std::endl;
     // Run Kawasaki simulation

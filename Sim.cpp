@@ -8,6 +8,14 @@
 #include <fstream>
 #include <sstream>
 #include <algorithm>
+#include <sys/stat.h>
+#ifdef _WIN32
+    #include <direct.h>
+    #define MKDIR(dir) _mkdir(dir)
+#else
+    #include <sys/stat.h>
+    #define MKDIR(dir) mkdir(dir, 0755)
+#endif
 
 void Sim::initialize(const SimConditions& sim_conditions) {
     //std::cout << "  Initializing simulation with conditions:" << std::endl;
@@ -64,7 +72,7 @@ void Sim::cluster_conditions_0() {
     std::vector<std::vector<int>> property_matrix = {
         {-1}   // Cluster 1: patterns 0 and 1
     };
-    cluster_conditions_from_indices_matrix_uninverted(property_matrix, 2);
+    cluster_conditions_from_indices_matrix(property_matrix, 1);
 }
 void Sim::cluster_conditions_1() {
     // Sample configuration - Alternating patterns
@@ -322,6 +330,19 @@ Swap Sim::calculate_reverse_swap(const Move& move) {
 }
 
 void Sim::save_results_to_csv(const std::string& filename) {
+    // Create outputs directory if it doesn't exist
+    size_t pos = filename.find('/');
+    if (pos != std::string::npos) {
+        std::string dir = filename.substr(0, pos);
+        struct stat st;
+        if (stat(dir.c_str(), &st) != 0) {
+            // Directory doesn't exist, create it
+            if (MKDIR(dir.c_str()) != 0) {
+                std::cerr << "Warning: Could not create directory " << dir << std::endl;
+            }
+        }
+    }
+    
     // Validate input data before attempting to save
     std::vector<std::string> empty_vectors;
     if (energy_history.empty()) empty_vectors.push_back("energy_history");
@@ -475,6 +496,19 @@ void Sim::save_results_to_csv(const std::string& filename) {
 }
 
 void Sim::save_grid_configuration_to_csv(const std::string& filename) {
+    // Create outputs directory if it doesn't exist
+    size_t pos = filename.find('/');
+    if (pos != std::string::npos) {
+        std::string dir = filename.substr(0, pos);
+        struct stat st;
+        if (stat(dir.c_str(), &st) != 0) {
+            // Directory doesn't exist, create it
+            if (MKDIR(dir.c_str()) != 0) {
+                std::cerr << "Warning: Could not create directory " << dir << std::endl;
+            }
+        }
+    }
+    
     std::ofstream file(filename);
     if (!file.is_open()) {
         //std::cerr << "Error: Could not open file " << filename << " for writing." << std::endl;
@@ -587,6 +621,7 @@ Swap Sim::select_initial_atoms_weighted(bool debug) {
     // STEP-1 : compute the total weight of *all* valid (A,B) ordered pairs
     //          Weight = (#pairs) × base probabilities × cluster weights
     // ----------------------------------------------------------------------
+    
     double total_pair_weight = grid.clusters[primary_cluster].cluster_prob*variables.Norm;
 
   
