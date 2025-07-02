@@ -6,6 +6,7 @@
     #include <vector>
     #include <functional>
     #include <random>
+    #include <memory>
 
     // Custom hash function for std::vector<int>
 
@@ -115,8 +116,8 @@
          // NEW: OPTIMIZATION SYSTEM FUNCTIONALITY
          // ===============================================
          
-         // Vector to store optimizer simulation objects
-         std::vector<Sim> optimizer_sims;
+         // Vector to store optimizer simulation objects (using unique_ptr since Sim is non-copyable)
+         std::vector<std::unique_ptr<Sim>> optimizer_sims;
          
          // Core optimization functions
          void run_cluster_seed_optimization(int iterations = 100, bool debug = false);

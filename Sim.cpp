@@ -770,7 +770,7 @@ void Sim::cluster_conditions_from_indices(const std::vector<int>& property_indic
     }
 
     // 5. Apply cluster weights (tier_size defaults to 1)
-    reapply_cluster_weights(conditions.cluster_bias, tier_size);
+    reapply_cluster_weights(conditions.cluster_bias, 1);
 
     // 6. Keep the original cluster at index 0 with 0 weight, but set the weighted catch-all appropriately
     if (catch_all && grid.num_clusters > 2) {
@@ -1466,14 +1466,14 @@ std::vector<std::vector<std::vector<int>>> Sim::generate_cluster_combinations(bo
     // Check if any cluster uses inversions by looking at cluster properties
     if (grid.num_clusters > 0) {
         // Check the first non-catch-all cluster to see if inversions are being used
-        for (int i = 1; i < grid.num_clusters && i < static_cast<int>(grid.clusters.size()); i++) {
-            ClusterProperty& prop = grid.clusters[i].property;
-            // If cluster has multiple patterns that look like inversions, inversions are on
-            if (prop.local_configs.size() > 12) { // Heuristic: more than base rotations
-                use_inversions = true;
-                break;
-            }
-        }
+                 for (int i = 1; i < grid.num_clusters && i < static_cast<int>(grid.clusters.size()); i++) {
+             ClusterProperty& prop = grid.clusters[i].property;
+             // If cluster has multiple patterns that look like inversions, inversions are on
+             if (prop.properties.size() > 12) { // Heuristic: more than base rotations
+                 use_inversions = true;
+                 break;
+             }
+         }
     }
     
     if (debug) {
@@ -1508,9 +1508,9 @@ std::vector<std::vector<int>> Sim::vectorize_cluster_seed(bool debug) {
         
         // Find which global pattern indices this cluster represents
         // This is a simplified approach - we'll collect the first few unique patterns
-        for (size_t i = 0; i < prop.local_configs.size() && cluster_properties.size() < 3; i++) {
+        for (size_t i = 0; i < prop.properties.size() && cluster_properties.size() < 3; i++) {
             bool found_match = false;
-            std::vector<int> config = prop.local_configs[i];
+            std::vector<int> config = prop.properties[i];
             
             // Search in GLOBAL_PATTERN_VECTORS to find matching index
             for (size_t global_idx = 0; global_idx < GLOBAL_PATTERN_VECTORS.size(); global_idx++) {
@@ -1721,16 +1721,16 @@ void Sim::initialize_optimizer_sims(const std::vector<std::vector<std::vector<in
             std::cout << "[DEBUG] Initializing optimizer sim " << i << std::endl;
         }
         
-        // Create new sim object
-        Sim new_sim;
+        // Create new sim object using unique_ptr
+        auto new_sim = std::make_unique<Sim>();
         
         // Copy parent properties (conditions, allowed sites, etc.)
-        copy_parent_properties(new_sim, debug);
+        copy_parent_properties(*new_sim, debug);
         
         // Apply the specific cluster combination
         try {
             // Reset cluster conditions first
-            new_sim.reset_cluster_conditions();
+            new_sim->reset_cluster_conditions();
             
             // Apply the combination using the matrix method
             if (debug) {
@@ -1742,17 +1742,17 @@ void Sim::initialize_optimizer_sims(const std::vector<std::vector<std::vector<in
             bool use_inversions = true;  // This should match the logic from generate_cluster_combinations
             
             if (use_inversions) {
-                new_sim.cluster_conditions_from_indices_matrix(combinations[i], 1);
+                new_sim->cluster_conditions_from_indices_matrix(combinations[i], 1);
             } else {
-                new_sim.cluster_conditions_from_indices_matrix_uninverted(combinations[i], 2);
+                new_sim->cluster_conditions_from_indices_matrix_uninverted(combinations[i], 2);
             }
             
             // Initialize the new sim
-            new_sim.initialize(new_sim.conditions);
+            new_sim->initialize(new_sim->conditions);
             
             if (debug) {
                 std::cout << "[DEBUG] Sim " << i << " initialized successfully. Energy: " 
-                          << new_sim.system_energy << std::endl;
+                          << new_sim->system_energy << std::endl;
             }
             
         } catch (const std::exception& e) {
@@ -1760,7 +1760,7 @@ void Sim::initialize_optimizer_sims(const std::vector<std::vector<std::vector<in
                 std::cout << "[DEBUG] Error initializing sim " << i << ": " << e.what() << std::endl;
             }
             // Create a dummy sim with high energy to mark as failed
-            new_sim.system_energy = 1e9f;
+            new_sim->system_energy = 1e9f;
         }
         
         optimizer_sims.push_back(std::move(new_sim));
@@ -1781,10 +1781,10 @@ void Sim::run_optimizer_tests(int iterations, bool debug) {
     for (size_t sim_idx = 0; sim_idx < optimizer_sims.size(); sim_idx++) {
         if (debug) {
             std::cout << "[DEBUG] Running test on sim " << sim_idx 
-                      << " (initial energy: " << optimizer_sims[sim_idx].system_energy << ")" << std::endl;
+                      << " (initial energy: " << optimizer_sims[sim_idx]->system_energy << ")" << std::endl;
         }
         
-        Sim& test_sim = optimizer_sims[sim_idx];
+        Sim& test_sim = *optimizer_sims[sim_idx];
         
         // Skip if sim failed to initialize properly
         if (test_sim.system_energy > 1e8f) {
@@ -1841,14 +1841,14 @@ int Sim::select_best_optimizer_sim(bool debug) {
     }
     
     int best_index = 0;
-    float best_energy = optimizer_sims[0].system_energy;
+    float best_energy = optimizer_sims[0]->system_energy;
     
     if (debug) {
         std::cout << "[DEBUG] Energy comparison:" << std::endl;
     }
     
     for (size_t i = 0; i < optimizer_sims.size(); i++) {
-        float energy = optimizer_sims[i].system_energy;
+        float energy = optimizer_sims[i]->system_energy;
         
         if (debug) {
             std::cout << "[DEBUG]   Sim " << i << ": " << energy;
@@ -1884,7 +1884,7 @@ void Sim::apply_best_cluster_seed(bool debug) {
         return;
     }
     
-    Sim& best_sim = optimizer_sims[best_index];
+    Sim& best_sim = *optimizer_sims[best_index];
     
     if (debug) {
         std::cout << "[DEBUG] Copying configuration from sim " << best_index << std::endl;
@@ -1976,8 +1976,8 @@ void Sim::debug_print_optimization_summary(int best_index, bool debug) {
     std::cout << "[DEBUG] Best performing sim: " << best_index << std::endl;
     
     if (best_index >= 0 && best_index < static_cast<int>(optimizer_sims.size())) {
-        std::cout << "[DEBUG] Best energy: " << optimizer_sims[best_index].system_energy << std::endl;
-        std::cout << "[DEBUG] Best sim cluster count: " << optimizer_sims[best_index].grid.num_clusters << std::endl;
+        std::cout << "[DEBUG] Best energy: " << optimizer_sims[best_index]->system_energy << std::endl;
+        std::cout << "[DEBUG] Best sim cluster count: " << optimizer_sims[best_index]->grid.num_clusters << std::endl;
     }
     
     std::cout << "[DEBUG] Final main sim energy: " << system_energy << std::endl;
