@@ -47,6 +47,7 @@ void validate_without_totals(Grid& grid);
 std::string run_and_save(std::string selection_string, int iterations, int cluster_type, bool overload, float same_cluster_prob, float expand, float tolerance_override);
 void display_cluster_composition(const Grid& grid);
 std::string run_and_save_delayed_rejection(std::string selection_string, int iterations, int cluster_type, int max_num_swaps, bool overload, float same_cluster_prob, float expand, float tolerance_override);
+void test_partition_functionality();
 
 // Add forward declaration for new helper
 std::vector<std::vector<int>> build_cluster_tree_(const std::string& selection_string, 
@@ -1472,6 +1473,101 @@ std::vector<std::vector<int>> build_cluster_tree_(const std::string& selection_s
     return lowest_cluster_matrix;
 }
 
+void test_partition_functionality() {
+    std::cout << "\n============ TESTING PARTITION FUNCTIONALITY ============" << std::endl;
+    
+    // Create a simulation using patterns similar to existing test functions
+    Sim sim;
+    sim.conditions = SimConditions(SIM_CONDITIONS.at("BJ=-0.44_NewMC"));
+    sim.conditions.minsize5_boundary_setting = true;
+    sim.conditions.prob_same_cluster_base = 0.5f;
+    sim.conditions.cluster_bias = 0.5f;
+    
+    // Use cluster condition 2 which has multiple clusters
+    sim.cluster_conditions(2);
+    sim.initialize(sim.conditions);
+    
+    std::cout << "Initial simulation setup:" << std::endl;
+    std::cout << "  Number of clusters: " << sim.grid.num_clusters << std::endl;
+    std::cout << "  Initial system energy: " << sim.system_energy << std::endl;
+    
+    // Validate the initial simulation
+    validate_all_cluster_properties(sim.grid);
+    
+    // Test partition function with inversions
+    std::cout << "\nTesting partition with inversions..." << std::endl;
+    std::vector<Sim*> children_with_inversions = sim.partition(true);
+    std::cout << "Created " << children_with_inversions.size() << " child simulations with inversions" << std::endl;
+    
+    // Display information about each child
+    for (size_t i = 0; i < children_with_inversions.size(); ++i) {
+        std::cout << "  Child " << i << ":" << std::endl;
+        std::cout << "    Allowed sites: " << children_with_inversions[i]->allowed_sites.size() << std::endl;
+        std::cout << "    Number of clusters: " << children_with_inversions[i]->grid.num_clusters << std::endl;
+        std::cout << "    Initial energy: " << children_with_inversions[i]->system_energy << std::endl;
+        
+        // Validate each child simulation
+        validate_without_totals(children_with_inversions[i]->grid);
+    }
+    
+    // Test iterate_children function
+    std::cout << "\nTesting iterate_children..." << std::endl;
+    float energy_before = sim.system_energy;
+    float combined_energy = sim.iterate_children(false); // Don't enable debug for cleaner output
+    
+    std::cout << "Energy before iterate_children: " << energy_before << std::endl;
+    std::cout << "Combined energy from children: " << combined_energy << std::endl;
+    std::cout << "Parent energy after iterate_children: " << sim.system_energy << std::endl;
+    
+    // Test resynchronize function
+    std::cout << "\nTesting resynchronize..." << std::endl;
+    float energy_before_resync = sim.system_energy;
+    sim.resynchronize();
+    float energy_after_resync = sim.system_energy;
+    
+    std::cout << "Energy before resynchronize: " << energy_before_resync << std::endl;
+    std::cout << "Energy after resynchronize: " << energy_after_resync << std::endl;
+    
+    // Validate the simulation after resynchronization
+    validate_all_cluster_properties(sim.grid);
+    
+    // Test partition function without inversions
+    std::cout << "\nTesting partition without inversions..." << std::endl;
+    std::vector<Sim*> children_without_inversions = sim.partition(false);
+    std::cout << "Created " << children_without_inversions.size() << " child simulations without inversions" << std::endl;
+    
+    // Display information about each child without inversions
+    for (size_t i = 0; i < children_without_inversions.size(); ++i) {
+        std::cout << "  Child " << i << ":" << std::endl;
+        std::cout << "    Allowed sites: " << children_without_inversions[i]->allowed_sites.size() << std::endl;
+        std::cout << "    Number of clusters: " << children_without_inversions[i]->grid.num_clusters << std::endl;
+        std::cout << "    Initial energy: " << children_without_inversions[i]->system_energy << std::endl;
+        
+        // Validate each child simulation
+        validate_without_totals(children_without_inversions[i]->grid);
+    }
+    
+    // Run a few iterations to test stability
+    std::cout << "\nRunning stability test with multiple iterations..." << std::endl;
+    int stable_iterations = 5;
+    std::vector<float> energy_history;
+    
+    for (int i = 0; i < stable_iterations; ++i) {
+        float iter_energy = sim.iterate_children(false);
+        energy_history.push_back(iter_energy);
+        sim.resynchronize();
+        std::cout << "  Iteration " << (i + 1) << ": combined energy = " << iter_energy 
+                  << ", final energy = " << sim.system_energy << std::endl;
+    }
+    
+    // Final validation
+    std::cout << "\nFinal validation..." << std::endl;
+    validate_all_cluster_properties(sim.grid);
+    
+    std::cout << "\n============ PARTITION FUNCTIONALITY TEST COMPLETE ============" << std::endl;
+    std::cout << "All partition, iterate_children, and resynchronize functions tested successfully!" << std::endl;
+}
+
 int main() {
     initialize_energy();
     initialize_pattern_library();
@@ -1507,6 +1603,9 @@ int main() {
     }
     
     std::cout << "\n============ END CLUSTER PROPERTY SETS OUTPUT ============" << std::endl;
+    
+    // Test the new partition functionality
+    test_partition_functionality();
     
     std::string BJ = "-0.44";
     
