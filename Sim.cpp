@@ -186,7 +186,7 @@ float Sim::swap_type_probability(Swap input_swap) {
     }
     else{return 0.0f;}
     // Return the combined probability
-    return (swap_type_prob/variables.Norm);
+    return (swap_type_prob/grid.num_clusters);
 }
 
 float Sim::compute_total_energy() {
